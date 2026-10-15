@@ -1,7 +1,10 @@
 /* 設定：Supabase Dashboard → Project Settings → API。
    只填 Project URL 與 publishable/anon key；絕不可放 service_role key。 */
-const SUPABASE_URL = "https://YOUR_PROJECT_ID.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY";
+const SUPABASE_URL = "https://izhpffguksslvdvykelc.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_sXbmPS9HYPCmi0xvqs79nA_QVFLTxmm";
+
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_sXbmPS9HYPCmi0xvqs79nA_QVFLTxmm
 
 const hasConfig = SUPABASE_URL.startsWith("https://") &&
   !SUPABASE_URL.includes("YOUR_PROJECT_ID") &&
