@@ -1,15 +1,15 @@
 # 設備保養作業管理系統
 
-GitHub Pages + Supabase Auth/Database + Supabase Edge Function + Resend Email。
+GitHub Pages + Supabase Database（免帳號密碼）+ Supabase Edge Function + Resend Email。
 
 ## 目前功能
-- Email/密碼登入與帳號建立入口
+- 免登入：新增作業時只需輸入保養人員姓名
 - 多人跨裝置共用 Supabase 資料
 - 自訂表單樣板、欄位類型：數字量測、單選、勾選、文字備註、日期時間
 - 保養作業暫存、完成、歷史紀錄搜尋
 - 單筆 Excel 與搜尋結果清單匯出
 - 完成後先成功寫入資料庫，再匯出 Excel，並呼叫 Edge Function 寄信
-- RLS：僅已登入使用者可讀寫；第一版所有已登入使用者權限相同
+- RLS：開放 anon 角色讀寫，所有網站訪客共用資料
 - 未包含照片上傳（第二階段再加）
 
 ## A. 建立 Supabase 專案與資料表
@@ -31,7 +31,7 @@ GitHub Pages + Supabase Auth/Database + Supabase Edge Function + Resend Email。
 2. 上傳 `index.html`、`styles.css`、`app.js`，以及 `supabase` 資料夾（資料夾用於後端部署，不會被前端直接執行）。
 3. Repository → Settings → Pages。
 4. Build and deployment 選 `Deploy from a branch`；Branch 選 `main`、資料夾選 `/ (root)`，按 Save。
-5. 等待 GitHub 顯示網址，開啟網址測試登入。
+5. 等待 GitHub 顯示網址，開啟網址測試新增作業與共用資料。
 6. 修改程式後 commit/push，GitHub Pages 會重新部署。
 
 ## D. 設定 Email 自動通知
@@ -54,7 +54,7 @@ supabase functions deploy notify-completion
 寄件地址必須符合 Resend 的網域驗證規則。收件人可以用逗號分隔多個 Email。
 
 ### 測試
-1. 登入網站。
+1. 開啟網站（不需登入）。
 2. 建立表單樣板。
 3. 建立作業、填寫欄位並儲存。
 4. 按「結束作業」。
@@ -62,10 +62,14 @@ supabase functions deploy notify-completion
 6. 若郵件服務失敗，畫面會顯示「作業已完成並存檔，但 Email 通知失敗」；不會把已存檔的作業誤報成儲存失敗。
 
 ## E. 權限與安全注意事項
-- RLS 只允許 `authenticated` 角色讀寫資料；未登入的 `anon` 不能讀取或修改資料。
-- 第一版所有已登入使用者都可讀寫、修改及刪除所有作業與樣板，尚未區分管理者/保養人員/主管。若資料需要限制部門或人員，應在上線前增加角色與資料列政策。
-- 如果啟用公開註冊，任何人都可能建立帳號。若只供公司內部使用，建議關閉公開註冊，由管理者在 Supabase Auth 建立帳號。
+- RLS 允許 `anon` 與 `authenticated` 角色讀寫資料，所有人共用同一套作業與樣板。
+- **重要安全取捨：免登入代表任何知道 GitHub Pages 網址的人都可能讀取、建立、修改及刪除全部資料。** 不要存放機密、個資或敏感營運資訊；若資料需保密，應改用登入或其他驗證機制。
+- 建議僅在受控的內部使用情境使用此版本；公開網站可能遭外部人員誤改或刪除資料。
 - GitHub Pages 上的網址與前端程式是公開的；anon/publishable key 本身不是服務端密鑰，安全性仰賴 RLS。
 - 不要把 `service_role` key、Resend API key 寫入 `app.js` 或提交到 GitHub。
 - 作業完成後仍允許編輯，是第一版簡化設計；若需要稽核，可再加「完成後鎖定」與主管簽核。
 - 初版採用 JSONB 保存表單欄位與結果，適合快速上線；後續若需要大量統計分析，可再正規化欄位資料。
+
+
+### 免登入版本的 Email 通知注意事項
+免登入後，瀏覽器沒有使用者登入 JWT。Supabase Edge Function 預設會驗證 JWT，因此若未另外設計受保護的通知流程，完成作業時的 Email 通知可能無法呼叫成功。**不要只為了讓寄信成功就直接把通知函式改成完全公開**，否則可能被濫用寄送垃圾郵件。若需要穩定自動寄信，建議再加入伺服器端驗證／限流或改用受控的資料庫觸發通知流程。

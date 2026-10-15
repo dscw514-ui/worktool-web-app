@@ -34,32 +34,6 @@ function showTab(tab) {
 }
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.tab)));
 
-function setAuthenticated(user) {
-  $("authPanel").classList.toggle("hidden",!!user);
-  $("appPanel").classList.toggle("hidden",!user);
-  $("logoutBtn").classList.toggle("hidden",!user);
-  $("userLabel").textContent=user ? user.email : "尚未登入";
-}
-
-async function authAction(kind) {
-  if(!db) return;
-  const email=$("loginEmail").value.trim(), password=$("loginPassword").value;
-  if(!email || !password) return message("authMessage","請輸入 Email 與密碼。",true);
-  const button=kind==="login"?document.querySelector('#loginForm button[type="submit"]'):$("signupBtn");
-  button.disabled=true;
-  try {
-    const result=kind==="login"
-      ? await db.auth.signInWithPassword({email,password})
-      : await db.auth.signUp({email,password});
-    if(result.error) throw result.error;
-    message("authMessage",kind==="login"?"登入成功。":(result.data.session?"帳號建立成功，已登入。":"帳號建立請求已送出；若啟用 Email 確認，請先至信箱確認。"));
-  } catch(e) { message("authMessage",e.message||"登入失敗。",true); }
-  finally {button.disabled=false;}
-}
-$("loginForm").addEventListener("submit",e=>{e.preventDefault();authAction("login");});
-$("signupBtn").addEventListener("click",()=>authAction("signup"));
-$("logoutBtn").addEventListener("click",async()=>{await db.auth.signOut();});
-
 async function loadAll() {
   if(!db) return;
   try {
@@ -298,9 +272,13 @@ async function openJob(id){
   for(const f of activeFields){if(f.type==="choice" && currentResults[f.id]){const radios=document.querySelectorAll(`input[name="field_${CSS.escape(f.id)}"]`);radios.forEach(r=>r.checked=r.value===currentResults[f.id].value);}}
 }
 function init(){
-  if(!db){$("setupNotice").classList.remove("hidden");setAuthenticated(null);return;}
-  db.auth.getSession().then(({data})=>setAuthenticated(data.session?.user||null));
-  db.auth.onAuthStateChange((_event,session)=>{setAuthenticated(session?.user||null);if(session?.user)setTimeout(loadAll,0);});
-  resetTemplate();renderBuilder();
+  if(!db){
+    $("setupNotice").classList.remove("hidden");
+    return;
+  }
+  resetTemplate();
+  renderBuilder();
+  resetJob();
+  loadAll();
 }
 init();
