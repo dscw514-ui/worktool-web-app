@@ -1,83 +1,96 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-TW">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>保養作業管理系統</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <title>設備保養作業管理系統</title>
   <link rel="stylesheet" href="styles.css">
-  <!-- 載入 Excel 匯出套件 (SheetJS) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <!-- 載入 Email 寄送套件 (EmailJS) -->
-  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>🛠️ 保養作業管理系統</h1>
-      <p>自訂保養表單、填寫作業、匯出 Excel 與寄送通知</p>
-    </header>
-
-    <!-- 區塊一：自訂保養樣板管理 (可新增/刪除樣板) -->
-    <section class="card" style="background-color: #f8fafc; border: 1px solid #cbd5e1;">
-      <h2>⚙️ 保養表單樣板管理</h2>
-      <div class="form-group">
-        <label for="newTemplateTitle">新樣板名稱：</label>
-        <input type="text" id="newTemplateTitle" placeholder="例如：水電巡檢單、發電機定期保養單">
-      </div>
-      <div class="form-group">
-        <label for="newTemplateItems">檢查項目（每行請填寫一個項目）：</label>
-        <textarea id="newTemplateItems" rows="4" placeholder="例如：&#10;電壓電流測試&#10;風扇運轉與異音檢查&#10;機殼清潔與除塵"></textarea>
-      </div>
-      <button type="button" class="btn btn-save" style="background-color: #475569;" onclick="addCustomTemplate()">➕ 建立新表單樣板</button>
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon">⚙</span><div><h1>設備保養作業管理系統</h1><p>Maintenance Work Management</p></div></div>
+    <div class="account"><span id="userLabel">尚未登入</span><button id="logoutBtn" class="btn btn-light hidden">登出</button></div>
+  </header>
+  <main class="layout">
+    <section id="setupNotice" class="notice hidden">
+      <h2>尚未設定 Supabase</h2>
+      <p>請在 <code>app.js</code> 開頭填入 Supabase Project URL 與 Publishable/anon key，再重新整理。</p>
     </section>
-
-    <!-- 區塊二：建立新保養作業 -->
-    <section class="card">
-      <h2>建立保養作業</h2>
-      <div class="form-group">
-        <label for="jobTitle">保養作業名稱：</label>
-        <input type="text" id="jobTitle" placeholder="例如：機房A區冷氣保養">
-      </div>
-      <div class="form-group">
-        <label for="inspector">保養人員：</label>
-        <input type="text" id="inspector" placeholder="請輸入姓名">
-      </div>
-      <div class="form-group">
-        <label for="templateSelect">選擇保養表單樣板：</label>
-        <div style="display: flex; gap: 10px;">
-          <select id="templateSelect" onchange="renderDynamicForm()" style="flex: 1;">
-            <option value="">-- 請選擇表單 --</option>
-          </select>
-          <button type="button" class="btn" style="background-color: #ef4444; color: white; width: auto; padding: 0 15px;" onclick="deleteSelectedTemplate()">🗑️ 刪除此樣板</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- 區塊三：動態表單填寫區域 -->
-    <section class="card" id="formContainer" style="display: none;">
-      <h2>保養檢查表單</h2>
-      <form id="maintenanceForm">
-        <div id="dynamicFields"></div>
-        
-        <div class="form-group" style="margin-top: 15px;">
-          <label for="remarks">綜合備註與改善建議：</label>
-          <textarea id="remarks" rows="3" placeholder="請輸入其他說明..."></textarea>
-        </div>
-
-        <div class="btn-group">
-          <button type="button" class="btn btn-save" onclick="saveProgress()">💾 暫存/儲存作業</button>
-          <button type="button" class="btn btn-finish" onclick="finishJob()">✅ 完成作業並匯出 Excel & 發郵件</button>
-        </div>
+    <section id="authPanel" class="panel auth-panel">
+      <div class="panel-heading"><div><p class="eyebrow">ACCOUNT</p><h2>登入系統</h2><p class="muted">第一版採用簡化權限：登入的使用者可共同管理保養資料。</p></div></div>
+      <form id="loginForm" class="form-grid">
+        <label>Email<input id="loginEmail" type="email" autocomplete="username" required placeholder="name@company.com"></label>
+        <label>密碼<input id="loginPassword" type="password" autocomplete="current-password" required minlength="6" placeholder="至少 6 個字元"></label>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">登入</button><button class="btn btn-outline" id="signupBtn" type="button">建立帳號</button></div>
       </form>
+      <p id="authMessage" class="message" role="status"></p>
+      <p class="small muted">如果已在 Supabase 關閉公開註冊，請由 Supabase 後台建立使用者後再登入。</p>
     </section>
 
-    <!-- 區塊四：歷史紀錄 -->
-    <section class="card">
-      <h2>歷史作業紀錄</h2>
-      <div id="historyList">尚無紀錄</div>
-    </section>
-  </div>
+    <div id="appPanel" class="hidden">
+      <nav class="tabs" aria-label="系統功能">
+        <button class="tab active" data-tab="jobs">保養作業</button>
+        <button class="tab" data-tab="templates">表單樣板</button>
+        <button class="tab" data-tab="history">歷史紀錄</button>
+      </nav>
 
+      <section id="tab-jobs" class="tab-content">
+        <div class="section-title"><div><p class="eyebrow">WORK ORDER</p><h2>建立／填寫保養作業</h2></div><button id="newJobBtn" class="btn btn-outline">＋ 新增作業</button></div>
+        <div class="panel">
+          <form id="jobForm">
+            <input id="jobId" type="hidden">
+            <div class="form-grid three">
+              <label>作業名稱 <input id="jobTitle" required maxlength="120" placeholder="例如：A區冷卻水泵定期保養"></label>
+              <label>設備編號／位置 <input id="equipment" maxlength="120" placeholder="例如：10SV-P-01／A區機房"></label>
+              <label>保養人員 <input id="inspector" required maxlength="80" placeholder="姓名"></label>
+              <label>使用表單樣板 <select id="jobTemplate" required><option value="">請選擇樣板</option></select></label>
+              <label>預定日期 <input id="scheduledAt" type="date"></label>
+              <label>狀態 <input id="jobStatus" value="進行中" readonly></label>
+            </div>
+            <div class="form-actions compact"><button id="loadTemplateBtn" type="button" class="btn btn-outline">套用／重新載入表單</button><span id="formVersionNote" class="small muted"></span></div>
+            <div id="dynamicFields" class="dynamic-fields"><div class="empty">請先選擇表單樣板，再按「套用／重新載入表單」。</div></div>
+            <label class="full-label">綜合備註／異常處置<textarea id="remarks" rows="3" placeholder="異常現象、處置方式、待追蹤事項…"></textarea></label>
+            <div class="form-actions">
+              <button type="button" id="saveDraftBtn" class="btn btn-primary">💾 儲存／暫存</button>
+              <button type="button" id="finishBtn" class="btn btn-success">✓ 結束作業</button>
+              <button type="button" id="exportCurrentBtn" class="btn btn-outline">匯出此筆 Excel</button>
+            </div>
+            <p id="jobMessage" class="message" role="status"></p>
+          </form>
+        </div>
+      </section>
+
+      <section id="tab-templates" class="tab-content hidden">
+        <div class="section-title"><div><p class="eyebrow">FORM BUILDER</p><h2>保養表單樣板管理</h2></div><button id="newTemplateBtn" class="btn btn-outline">＋ 新增樣板</button></div>
+        <div class="panel">
+          <form id="templateForm">
+            <input id="templateId" type="hidden">
+            <div class="form-grid two">
+              <label>樣板名稱<input id="templateTitle" required maxlength="120" placeholder="例如：冷卻水泵保養單"></label>
+              <label>適用設備／分類<input id="templateCategory" maxlength="120" placeholder="例如：泵浦、變壓器、配電盤"></label>
+            </div>
+            <div class="builder-heading"><div><h3>檢查欄位</h3><p class="muted small">每個欄位可設定類型、單位、選項與必填。</p></div><button id="addFieldBtn" class="btn btn-outline" type="button">＋ 新增欄位</button></div>
+            <div id="builderFields" class="builder-fields"></div>
+            <div class="form-actions"><button class="btn btn-primary" type="submit">儲存樣板</button><button id="resetTemplateBtn" class="btn btn-outline" type="button">清除／取消</button></div>
+            <p id="templateMessage" class="message" role="status"></p>
+          </form>
+        </div>
+        <div class="panel"><h3>現有樣板</h3><div id="templateList" class="record-list"><div class="empty">載入中…</div></div></div>
+      </section>
+
+      <section id="tab-history" class="tab-content hidden">
+        <div class="section-title"><div><p class="eyebrow">RECORDS</p><h2>歷史作業紀錄</h2></div><button id="refreshHistoryBtn" class="btn btn-outline">重新整理</button></div>
+        <div class="panel">
+          <div class="filter-row"><input id="historySearch" placeholder="搜尋作業、設備、人員…" aria-label="搜尋歷史紀錄"><select id="historyStatus"><option value="">全部狀態</option><option>進行中</option><option>已完成</option></select><button id="exportAllBtn" class="btn btn-outline">匯出搜尋結果 Excel</button></div>
+          <div id="historyList" class="record-list"><div class="empty">載入中…</div></div>
+        </div>
+      </section>
+    </div>
+    <footer><span>設備保養作業管理系統</span><span>雲端資料由 Supabase 儲存</span></footer>
+  </main>
   <script src="app.js"></script>
 </body>
 </html>

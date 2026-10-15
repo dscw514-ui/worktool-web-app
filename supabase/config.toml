@@ -1,0 +1,4 @@
+project_id = "replace-with-your-project-ref"
+
+[functions.notify-completion]
+verify_jwt = true
