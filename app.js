@@ -3,9 +3,6 @@
 const SUPABASE_URL = "https://izhpffguksslvdvykelc.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_sXbmPS9HYPCmi0xvqs79nA_QVFLTxmm";
 
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_sXbmPS9HYPCmi0xvqs79nA_QVFLTxmm
-
 const hasConfig = SUPABASE_URL.startsWith("https://") &&
   !SUPABASE_URL.includes("YOUR_PROJECT_ID") &&
   !SUPABASE_ANON_KEY.includes("YOUR_SUPABASE");
