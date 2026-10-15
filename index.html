@@ -14,12 +14,26 @@
   <div class="container">
     <header>
       <h1>🛠️ 保養作業管理系統</h1>
-      <p>輕鬆建立保養作業、填寫表單、匯出 Excel 與寄送通知</p>
+      <p>自訂保養表單、填寫作業、匯出 Excel 與寄送通知</p>
     </header>
 
-    <!-- 新增作業與選取樣板區域 -->
+    <!-- 區塊一：自訂保養樣板管理 (可新增/刪除樣板) -->
+    <section class="card" style="background-color: #f8fafc; border: 1px solid #cbd5e1;">
+      <h2>⚙️ 保養表單樣板管理</h2>
+      <div class="form-group">
+        <label for="newTemplateTitle">新樣板名稱：</label>
+        <input type="text" id="newTemplateTitle" placeholder="例如：水電巡檢單、發電機定期保養單">
+      </div>
+      <div class="form-group">
+        <label for="newTemplateItems">檢查項目（每行請填寫一個項目）：</label>
+        <textarea id="newTemplateItems" rows="4" placeholder="例如：&#10;電壓電流測試&#10;風扇運轉與異音檢查&#10;機殼清潔與除塵"></textarea>
+      </div>
+      <button type="button" class="btn btn-save" style="background-color: #475569;" onclick="addCustomTemplate()">➕ 建立新表單樣板</button>
+    </section>
+
+    <!-- 區塊二：建立新保養作業 -->
     <section class="card">
-      <h2>建立新保養作業</h2>
+      <h2>建立保養作業</h2>
       <div class="form-group">
         <label for="jobTitle">保養作業名稱：</label>
         <input type="text" id="jobTitle" placeholder="例如：機房A區冷氣保養">
@@ -30,15 +44,16 @@
       </div>
       <div class="form-group">
         <label for="templateSelect">選擇保養表單樣板：</label>
-        <select id="templateSelect" onchange="renderDynamicForm()">
-          <option value="">-- 請選擇表單 --</option>
-          <option value="equipment">設備例行保養單</option>
-          <option value="vehicle">公務車輛維護檢查單</option>
-        </select>
+        <div style="display: flex; gap: 10px;">
+          <select id="templateSelect" onchange="renderDynamicForm()" style="flex: 1;">
+            <option value="">-- 請選擇表單 --</option>
+          </select>
+          <button type="button" class="btn" style="background-color: #ef4444; color: white; width: auto; padding: 0 15px;" onclick="deleteSelectedTemplate()">🗑️ 刪除此樣板</button>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <!-- 動態表單填寫區域 -->
+    <!-- 區塊三：動態表單填寫區域 -->
     <section class="card" id="formContainer" style="display: none;">
       <h2>保養檢查表單</h2>
       <form id="maintenanceForm">
@@ -56,7 +71,7 @@
       </form>
     </section>
 
-    <!-- 歷史紀錄 -->
+    <!-- 區塊四：歷史紀錄 -->
     <section class="card">
       <h2>歷史作業紀錄</h2>
       <div id="historyList">尚無紀錄</div>

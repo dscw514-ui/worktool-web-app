@@ -1,6 +1,6 @@
-// 定義表單樣板結構
-const templates = {
-  equipment: {
+// 預設樣板（若 LocalStorage 無資料時自動載入）
+const defaultTemplates = {
+  "tpl_1": {
     title: "設備例行保養單",
     items: [
       "外觀清潔與螺絲緊固",
@@ -9,7 +9,7 @@ const templates = {
       "潤滑油/冷卻水添加與更換"
     ]
   },
-  vehicle: {
+  "tpl_2": {
     title: "公務車輛維護檢查單",
     items: [
       "五油三水檢查",
@@ -22,16 +22,96 @@ const templates = {
 
 let currentJobId = null;
 
-// 初始化 EmailJS（若有申請 EmailJS，可在此處輸入您的 Public Key）
-// emailjs.init("YOUR_PUBLIC_KEY");
+// 取得當前所有樣板 (從 LocalStorage 或 預設值)
+function getTemplates() {
+  const stored = localStorage.getItem("custom_templates");
+  if (!stored) {
+    localStorage.setItem("custom_templates", JSON.stringify(defaultTemplates));
+    return defaultTemplates;
+  }
+  return JSON.parse(stored);
+}
+
+// 新增自訂樣板
+function addCustomTemplate() {
+  const title = document.getElementById("newTemplateTitle").value.trim();
+  const itemsText = document.getElementById("newTemplateItems").value.trim();
+
+  if (!title || !itemsText) {
+    alert("請填寫「樣板名稱」與「檢查項目」！");
+    return;
+  }
+
+  // 將多行文字轉為陣列，過濾空白行
+  const items = itemsText.split("\n").map(item => item.trim()).filter(item => item.length > 0);
+
+  if (items.length === 0) {
+    alert("請至少輸入一個檢查項目！");
+    return;
+  }
+
+  const templates = getTemplates();
+  const newKey = "tpl_" + Date.now();
+  
+  templates[newKey] = {
+    title: title,
+    items: items
+  };
+
+  localStorage.setItem("custom_templates", JSON.stringify(templates));
+
+  // 清空輸入框並刷新下拉選單
+  document.getElementById("newTemplateTitle").value = "";
+  document.getElementById("newTemplateItems").value = "";
+  alert(`成功新增樣板：「${title}」！`);
+  loadTemplateDropdown();
+}
+
+// 刪除選中的樣板
+function deleteSelectedTemplate() {
+  const select = document.getElementById("templateSelect");
+  const key = select.value;
+
+  if (!key) {
+    alert("請先選擇要刪除的樣板！");
+    return;
+  }
+
+  const templates = getTemplates();
+  const title = templates[key] ? templates[key].title : "";
+
+  if (confirm(`確定要刪除「${title}」樣板嗎？`)) {
+    delete templates[key];
+    localStorage.setItem("custom_templates", JSON.stringify(templates));
+    loadTemplateDropdown();
+    document.getElementById("formContainer").style.display = "none";
+    alert("樣板已刪除！");
+  }
+}
+
+// 載入樣板到下拉選單
+function loadTemplateDropdown() {
+  const select = document.getElementById("templateSelect");
+  const templates = getTemplates();
+
+  select.innerHTML = '<option value="">-- 請選擇表單 --</option>';
+
+  for (const [key, tpl] of Object.entries(templates)) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = tpl.title;
+    select.appendChild(opt);
+  }
+}
 
 // 選擇樣板後呈現動態表單
 function renderDynamicForm() {
-  const type = document.getElementById("templateSelect").value;
+  const key = document.getElementById("templateSelect").value;
   const container = document.getElementById("formContainer");
   const fields = document.getElementById("dynamicFields");
+  const templates = getTemplates();
 
-  if (!type || !templates[type]) {
+  if (!key || !templates[key]) {
     container.style.display = "none";
     return;
   }
@@ -39,12 +119,12 @@ function renderDynamicForm() {
   container.style.display = "block";
   fields.innerHTML = "";
 
-  const template = templates[type];
+  const template = templates[key];
   template.items.forEach((item, index) => {
     const itemDiv = document.createElement("div");
     itemDiv.className = "check-item";
     itemDiv.innerHTML = `
-      <span>${index + 1}.${item}</span>
+      <span>${index + 1}. ${item}</span>
       <div class="check-options">
         <label><input type="radio" name="item_${index}" value="合格" checked> 合格</label>
         <label><input type="radio" name="item_${index}" value="異常"> 異常</label>
@@ -61,8 +141,9 @@ function renderDynamicForm() {
 
 // 收集當前表單資料
 function getFormData(status = "進行中") {
-  const type = document.getElementById("templateSelect").value;
-  const template = templates[type];
+  const key = document.getElementById("templateSelect").value;
+  const templates = getTemplates();
+  const template = templates[key];
   
   const results = template ? template.items.map((item, index) => {
     const selected = document.querySelector(`input[name="item_${index}"]:checked`);
@@ -139,7 +220,7 @@ function finishJob() {
   localStorage.setItem("maintenance_records", JSON.stringify(records));
   loadHistory();
 
-  // 2. 匯出 Excel (使用 SheetJS)
+  // 2. 匯出 Excel
   exportToExcel(data);
 
   // 3. 寄送 Email 通知
@@ -172,11 +253,10 @@ function exportToExcel(data) {
 
 // 寄送 Email 邏輯
 function sendEmailNotification(data) {
-  const targetEmail = "manager@example.com"; // 預設收件者 Email (可自訂)
+  const targetEmail = "manager@example.com";
 
-  // 方法 A: 呼叫客戶端預設 Email 軟體 (mailto:)
-  const subject = encodeURIComponent(`[保養完成通知] ${data.jobTitle} -${data.inspector}`);
-  const bodyDetails = data.results.map((r, i) => `${i+1}. ${r.checkItem}:${r.result}`).join("\n");
+  const subject = encodeURIComponent(`[保養完成通知] ${data.jobTitle} - ${data.inspector}`);
+  const bodyDetails = data.results.map((r, i) => `${i+1}. ${r.checkItem}: ${r.result}`).join("\n");
   const body = encodeURIComponent(
     `保養作業已順利完成！\n\n` +
     `作業名稱：${data.jobTitle}\n` +
@@ -188,19 +268,10 @@ function sendEmailNotification(data) {
   );
 
   window.location.href = `mailto:${targetEmail}?subject=${subject}&body=${body}`;
-
-  /* 
-  // 方法 B: 若要背景自動寄信，需先申請 EmailJS 並取消此區塊註解：
-  emailjs.send("YOUR_SERVICE_ID", "YOUR_TEMPLATE_ID", {
-    to_email: targetEmail,
-    job_title: data.jobTitle,
-    inspector: data.inspector,
-    remarks: data.remarks
-  }).then(() => {
-    alert("郵件已自動發送！");
-  });
-  */
 }
 
 // 頁面載入時初始化
-document.addEventListener("DOMContentLoaded", loadHistory);
+document.addEventListener("DOMContentLoaded", () => {
+  loadTemplateDropdown();
+  loadHistory();
+});
