@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>保養作業管理系統</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- 載入 Excel 匯出套件 (SheetJS) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- 載入 Email 寄送套件 (EmailJS) -->
+  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🛠️ 保養作業管理系統</h1>
+      <p>輕鬆建立保養作業、填寫表單、匯出 Excel 與寄送通知</p>
+    </header>
+
+    <!-- 新增作業與選取樣板區域 -->
+    <section class="card">
+      <h2>建立新保養作業</h2>
+      <div class="form-group">
+        <label for="jobTitle">保養作業名稱：</label>
+        <input type="text" id="jobTitle" placeholder="例如：機房A區冷氣保養">
+      </div>
+      <div class="form-group">
+        <label for="inspector">保養人員：</label>
+        <input type="text" id="inspector" placeholder="請輸入姓名">
+      </div>
+      <div class="form-group">
+        <label for="templateSelect">選擇保養表單樣板：</label>
+        <select id="templateSelect" onchange="renderDynamicForm()">
+          <option value="">-- 請選擇表單 --</option>
+          <option value="equipment">設備例行保養單</option>
+          <option value="vehicle">公務車輛維護檢查單</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 動態表單填寫區域 -->
+    <section class="card" id="formContainer" style="display: none;">
+      <h2>保養檢查表單</h2>
+      <form id="maintenanceForm">
+        <div id="dynamicFields"></div>
+        
+        <div class="form-group" style="margin-top: 15px;">
+          <label for="remarks">綜合備註與改善建議：</label>
+          <textarea id="remarks" rows="3" placeholder="請輸入其他說明..."></textarea>
+        </div>
+
+        <div class="btn-group">
+          <button type="button" class="btn btn-save" onclick="saveProgress()">💾 暫存/儲存作業</button>
+          <button type="button" class="btn btn-finish" onclick="finishJob()">✅ 完成作業並匯出 Excel & 發郵件</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 歷史紀錄 -->
+    <section class="card">
+      <h2>歷史作業紀錄</h2>
+      <div id="historyList">尚無紀錄</div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
