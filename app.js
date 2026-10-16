@@ -20,6 +20,8 @@ let activeFields = [];
 let currentResults = {};
 let editingTemplateFields = [];
 let activeJobTemplateId = null;
+let currentUser = null;
+let isAuthenticated = false;
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -28,6 +30,11 @@ const localDateTime = () => new Date().toISOString();
 const shortDate = value => value ? new Date(value).toLocaleString("zh-TW") : "—";
 
 function showTab(tab) {
+  if ((tab === "templates" || tab === "history") && !isAuthenticated) {
+    $("managerLoginPanel").classList.remove("hidden");
+    message("authMessage", "請先登入管理者帳號，才能管理樣板或查看歷史紀錄。", true);
+    return;
+  }
   document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
   document.querySelectorAll(".tab-content").forEach(el=>el.classList.add("hidden"));
   $("tab-"+tab).classList.remove("hidden");
@@ -37,18 +44,58 @@ document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>show
 async function loadAll() {
   if(!db) return;
   try {
-    const [t,j]=await Promise.all([
-      db.from("form_templates").select("*").order("updated_at",{ascending:false}),
-      db.from("maintenance_jobs").select("*").order("updated_at",{ascending:false})
-    ]);
-    if(t.error) throw t.error; if(j.error) throw j.error;
-    templates=t.data||[]; jobs=j.data||[];
-    renderTemplateSelect(); renderTemplateList(); renderHistory();
+    const t = await db.from("form_templates").select("*").order("updated_at",{ascending:false});
+    if(t.error) throw t.error;
+    templates=t.data||[];
+    renderTemplateSelect();
+    if(isAuthenticated) {
+      const j = await db.from("maintenance_jobs").select("*").order("updated_at",{ascending:false});
+      if(j.error) throw j.error;
+      jobs=j.data||[];
+      renderTemplateList();
+      renderHistory();
+    } else {
+      jobs=[];
+      $("templateList").innerHTML='<div class="empty">請登入管理者帳號以管理表單樣板。</div>';
+      $("historyList").innerHTML='<div class="empty">請登入管理者帳號以查看歷史紀錄。</div>';
+    }
   } catch(e) {
-    message("jobMessage","讀取資料失敗："+e.message,true);
-    message("templateMessage","讀取資料失敗："+e.message,true);
+    message("jobMessage","讀取樣板／資料失敗："+(e.message||e),true);
+    message("templateMessage","讀取資料失敗："+(e.message||e),true);
   }
 }
+
+function updateAuthUI() {
+  $("templatesTab").classList.toggle("hidden", !isAuthenticated);
+  $("historyTab").classList.toggle("hidden", !isAuthenticated);
+  $("managerLoginToggle").classList.toggle("hidden", isAuthenticated);
+  $("managerLogoutBtn").classList.toggle("hidden", !isAuthenticated);
+  $("accountStatus").textContent = isAuthenticated ? `管理者：${currentUser?.email || "已登入"}` : "作業免登入";
+  if(!isAuthenticated && ["templates","history"].includes(document.querySelector(".tab.active")?.dataset.tab)) showTab("jobs");
+}
+
+$("managerLoginToggle").addEventListener("click",()=>{
+  $("managerLoginPanel").classList.toggle("hidden");
+  if(!$("managerLoginPanel").classList.contains("hidden")) $("managerEmail").focus();
+});
+$("managerLoginCancel").addEventListener("click",()=>$("managerLoginPanel").classList.add("hidden"));
+$("managerLoginForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  if(!db) return message("authMessage","尚未設定 Supabase，請先檢查 app.js 設定。",true);
+  const btn=$("managerLoginBtn"); btn.disabled=true; message("authMessage","登入中…");
+  try {
+    const {data,error}=await db.auth.signInWithPassword({email:$("managerEmail").value.trim(),password:$("managerPassword").value});
+    if(error) throw error;
+    currentUser=data.user; isAuthenticated=!!data.session;
+    updateAuthUI(); $("managerLoginPanel").classList.add("hidden");
+    message("authMessage",""); await loadAll(); showTab("templates");
+  } catch(err) { message("authMessage","登入失敗："+(err.message||err),true); }
+  finally {btn.disabled=false;}
+});
+$("managerLogoutBtn").addEventListener("click",async()=>{
+  if(db) { const {error}=await db.auth.signOut(); if(error) return alert("登出失敗："+error.message); }
+  currentUser=null; isAuthenticated=false; jobs=[]; updateAuthUI(); await loadAll(); showTab("jobs");
+});
 
 function renderTemplateSelect(selected="") {
   const el=$("jobTemplate"), prior=selected||el.value;
@@ -139,31 +186,36 @@ function collectJob(status) {
 
 async function saveJob(status) {
   const btn=status==="已完成"?$("finishBtn"):$("saveDraftBtn");
+  if(!db) return message("jobMessage","尚未設定 Supabase，請先檢查 app.js 設定。",true);
   btn.disabled=true; message("jobMessage",status==="已完成"?"正在儲存並結束作業…":"正在儲存…");
   try {
     const data=collectJob(status);
     const now=localDateTime();
     const row={...data,updated_at:now};
     if(status!=="已完成") row.completed_at=null;
-    const result=await db.from("maintenance_jobs").upsert(row,{onConflict:"id"}).select().single();
+    // 公開作業端沒有 SELECT 權限，因此不使用 .select()；成功與否以資料庫回傳的 error 判定。
+    const result=await db.from("maintenance_jobs").upsert(row,{onConflict:"id"});
     if(result.error) throw result.error;
-    $("jobId").value=result.data.id;
-    $("jobStatus").value=result.data.status;
-    // 只有資料庫成功儲存後，才顯示已完成並寄送通知。
+    $("jobId").value=data.id;
+    $("jobStatus").value=data.status;
     await loadAll();
-    message("jobMessage",status==="已完成"?"作業已成功儲存並結束。正在寄送通知…":"作業已成功儲存。");
     if(status==="已完成") {
-      exportJob(result.data);
-      const mail=await db.functions.invoke("notify-completion",{body:{job_id:result.data.id}});
-      if(mail.error) {
-        message("jobMessage","作業已完成並存檔，但 Email 通知失敗："+mail.error.message+"。可至歷史紀錄重新匯出。",true);
-      } else if(mail.data?.ok) message("jobMessage","作業已完成並存檔，Excel 已下載，Email 通知已送出。");
-      else message("jobMessage","作業已完成並存檔，Excel 已下載；通知服務回覆："+(mail.data?.error||"未確認寄送結果"),true);
-    }
+      exportJob({...row,updated_at:now});
+      if(isAuthenticated) {
+        message("jobMessage","作業已成功儲存並結束。正在寄送通知…");
+        const mail=await db.functions.invoke("notify-completion",{body:{job_id:data.id}});
+        if(mail.error) message("jobMessage","作業已完成並存檔，Excel 已下載，但 Email 通知失敗："+mail.error.message,true);
+        else if(mail.data?.ok) message("jobMessage","作業已完成並存檔，Excel 已下載，Email 通知已送出。");
+        else message("jobMessage","作業已完成並存檔，Excel 已下載；通知服務回覆："+(mail.data?.error||"未確認寄送結果"),true);
+      } else {
+        message("jobMessage","作業已成功儲存並結束，Excel 已下載。若需自動 Email 通知，請由管理者登入後完成作業。",false);
+      }
+    } else message("jobMessage","作業已成功儲存。此頁面可繼續修改並再次儲存；若關閉頁面，請管理者登入歷史紀錄管理。",false);
   } catch(e) {
     message("jobMessage","儲存失敗，作業狀態未更新："+(e.message||e),true);
   } finally {btn.disabled=false;}
 }
+
 $("saveDraftBtn").addEventListener("click",()=>saveJob("進行中"));
 $("finishBtn").addEventListener("click",()=>{
   if(confirm("確定結束此保養作業？系統會先存檔，再匯出 Excel 並寄送通知。")) saveJob("已完成");
@@ -208,6 +260,7 @@ function renderBuilder() {
 $("templateForm").addEventListener("submit",async e=>{
   e.preventDefault(); const btn=$('#templateForm button[type="submit"]');btn.disabled=true;
   try{
+    if(!isAuthenticated) throw new Error("請先登入管理者帳號才能儲存樣板。");
     const title=$("templateTitle").value.trim();
     if(!title)throw new Error("請輸入樣板名稱。");
     const fields=editingTemplateFields.map(f=>({...f,label:String(f.label||"").trim(),unit:String(f.unit||"").trim(),options:String(f.options||"").trim()}));
@@ -226,6 +279,7 @@ function editTemplate(t){
   editingTemplateFields=(t.fields||[]).map(f=>({...f}));renderBuilder();showTab("templates");window.scrollTo({top:0,behavior:"smooth"});
 }
 async function deleteTemplate(t){
+  if(!isAuthenticated) return message("templateMessage","請先登入管理者帳號才能刪除樣板。",true);
   if(!confirm(`確定刪除樣板「${t.title}」？已建立的作業紀錄不會刪除。`))return;
   const res=await db.from("form_templates").delete().eq("id",t.id);
   if(res.error)message("templateMessage","刪除失敗："+res.error.message,true);else await loadAll();
@@ -279,6 +333,15 @@ function init(){
   resetTemplate();
   renderBuilder();
   resetJob();
-  loadAll();
+  updateAuthUI();
+  db.auth.getSession().then(({data})=>{
+    currentUser=data.session?.user||null; isAuthenticated=!!data.session;
+    updateAuthUI(); loadAll();
+  });
+  db.auth.onAuthStateChange((_event,session)=>{
+    currentUser=session?.user||null; isAuthenticated=!!session;
+    updateAuthUI();
+    setTimeout(()=>loadAll(),0);
+  });
 }
 init();

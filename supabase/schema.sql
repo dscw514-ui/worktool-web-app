@@ -42,47 +42,38 @@ create index if not exists maintenance_jobs_template_idx
 alter table public.form_templates enable row level security;
 alter table public.maintenance_jobs enable row level security;
 
--- 免登入版本：anon 與 authenticated 均可讀寫。
--- 注意：此網站為公開共用模式，任何取得網址的人都可能讀取/修改/刪除資料。
-drop policy if exists "Authenticated users can read templates" on public.form_templates;
-drop policy if exists "Authenticated users can insert templates" on public.form_templates;
-drop policy if exists "Authenticated users can update templates" on public.form_templates;
-drop policy if exists "Authenticated users can delete templates" on public.form_templates;
-drop policy if exists "Public can read templates" on public.form_templates;
-drop policy if exists "Public can insert templates" on public.form_templates;
-drop policy if exists "Public can update templates" on public.form_templates;
-drop policy if exists "Public can delete templates" on public.form_templates;
+-- 權限設計：
+-- 1) anon 可讀取樣板，讓免登入人員可以選樣板及填寫作業；只有 authenticated 可管理樣板。
+-- 2) anon 可新增／更新作業，但不可查詢歷史紀錄；authenticated 可查看及管理歷史紀錄。
+-- 3) 因免登入作業無法可靠識別建立者，anon 更新權限仍是公開寫入權限；請勿放入敏感資料。
 
-create policy "Public can read templates"
-  on public.form_templates for select to anon, authenticated using (true);
-create policy "Public can insert templates"
-  on public.form_templates for insert to anon, authenticated with check (true);
-create policy "Public can update templates"
-  on public.form_templates for update to anon, authenticated using (true) with check (true);
-create policy "Public can delete templates"
-  on public.form_templates for delete to anon, authenticated using (true);
+do $$ declare p record; begin
+  for p in select tablename, policyname from pg_policies where schemaname='public' and tablename in ('form_templates','maintenance_jobs') loop
+    execute format('drop policy if exists %I on public.%I', p.policyname, p.tablename);
+  end loop;
+end $$;
 
-drop policy if exists "Authenticated users can read jobs" on public.maintenance_jobs;
-drop policy if exists "Authenticated users can insert jobs" on public.maintenance_jobs;
-drop policy if exists "Authenticated users can update jobs" on public.maintenance_jobs;
-drop policy if exists "Authenticated users can delete jobs" on public.maintenance_jobs;
-drop policy if exists "Public can read jobs" on public.maintenance_jobs;
-drop policy if exists "Public can insert jobs" on public.maintenance_jobs;
-drop policy if exists "Public can update jobs" on public.maintenance_jobs;
-drop policy if exists "Public can delete jobs" on public.maintenance_jobs;
+create policy "Templates visible to public" on public.form_templates
+  for select to anon, authenticated using (true);
+create policy "Authenticated manage templates" on public.form_templates
+  for all to authenticated using (auth.uid() is not null) with check (auth.uid() is not null);
 
-create policy "Public can read jobs"
-  on public.maintenance_jobs for select to anon, authenticated using (true);
-create policy "Public can insert jobs"
-  on public.maintenance_jobs for insert to anon, authenticated with check (true);
-create policy "Public can update jobs"
-  on public.maintenance_jobs for update to anon, authenticated using (true) with check (true);
-create policy "Public can delete jobs"
-  on public.maintenance_jobs for delete to anon, authenticated using (true);
+create policy "Public can create jobs" on public.maintenance_jobs
+  for insert to anon, authenticated with check (true);
+create policy "Public can update jobs without history access" on public.maintenance_jobs
+  for update to anon using (true) with check (true);
+create policy "Authenticated can read jobs" on public.maintenance_jobs
+  for select to authenticated using (auth.uid() is not null);
+create policy "Authenticated can manage jobs" on public.maintenance_jobs
+  for all to authenticated using (auth.uid() is not null) with check (auth.uid() is not null);
 
+revoke all on public.form_templates from anon, authenticated;
+revoke all on public.maintenance_jobs from anon, authenticated;
 grant usage on schema public to anon, authenticated;
-grant select, insert, update, delete on public.form_templates to anon, authenticated;
-grant select, insert, update, delete on public.maintenance_jobs to anon, authenticated;
+grant select on public.form_templates to anon, authenticated;
+grant insert, update on public.maintenance_jobs to anon;
+grant select, insert, update, delete on public.form_templates to authenticated;
+grant select, insert, update, delete on public.maintenance_jobs to authenticated;
 
 -- 初始樣板：只有在目前完全沒有樣板時才插入
 insert into public.form_templates (title, category, fields)
@@ -97,4 +88,4 @@ select '設備例行保養單', '通用設備',
 ]'::jsonb
 where not exists (select 1 from public.form_templates);
 
--- 此版本不使用 Supabase Auth 登入；不需建立使用者帳號。
+-- 管理者須在 Supabase Authentication → Users 建立帳號；前端不提供公開註冊。
