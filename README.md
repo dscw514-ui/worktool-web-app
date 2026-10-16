@@ -1,87 +1,46 @@
-# 設備保養作業管理系統
+# 設備保養作業管理系統（重新設計版）
 
-GitHub Pages + Supabase Database + Supabase Auth（僅管理功能登入）+ Supabase Edge Function + Resend Email。
+本專案參考附件 `office-drinks-main.zip` 的**模組化前端**（`index.html`、`css/style.css`、`js/config.js`、`js/backend.js`、`js/logic.js`、`js/app.js`）與 **Supabase RPC 伺服器端寫入**設計，並重新實作為設備保養管理系統。不是把飲料系統改名；不會更動既有 `od_` 資料表。
 
-## 目前功能
-- 作業人員免登入：新增／填寫／儲存作業只需輸入保養人員姓名
-- 多人跨裝置共用 Supabase 資料
-- 管理者登入後可新增／修改／刪除表單樣板；公開作業端只能讀取樣板並填寫
-- 保養作業暫存、完成；歷史紀錄查看與管理者登入綁定
-- 單筆 Excel 與搜尋結果清單匯出
-- 完成後先成功寫入資料庫，再匯出 Excel，並呼叫 Edge Function 寄信
-- RLS：anon 可讀樣板與新增／更新作業；只有 authenticated 可管理樣板及讀取歷史紀錄
-- 未包含照片上傳（第二階段再加）
+## 功能
 
-## A. 建立 Supabase 專案與資料表
-1. 建立 Supabase 專案。
-2. 打開 SQL Editor → New query。
-3. 將 `supabase/schema.sql` 全文貼入並執行。
-4. Dashboard → Project Settings → API，複製 Project URL 與 publishable/anon key。
-5. Authentication → Users，建立第一個使用者；若不想讓所有人自行註冊，關閉公開註冊。第一版也提供註冊按鈕，公開註冊是否開放由 Supabase Auth 設定控制。
+- 一般人員**免帳號密碼**：選樣板、輸入姓名與設備、填寫欄位、儲存草稿、結束作業。
+- 表單欄位：數字、文字、勾選、單選、日期時間，支援必填與單位。
+- 管理者登入後：新增／修改／刪除樣板，查看／編輯歷史作業，手動匯出 CSV（Excel 可開啟）。
+- 結束作業**不自動匯出**。只有資料庫 RPC 回傳成功才顯示成功。
+- 匿名作業透過伺服器回傳的隨機編輯權杖更新，避免匿名使用者直接查詢歷史作業；權杖只保留在當前網頁狀態，重整頁面後無法繼續編輯，須由管理者處理。
+- 歷史紀錄與編輯由資料庫 RPC 檢查 `em_admins`，**不是只靠隱藏按鈕**。
 
-## B. 設定前端
-1. 在 `app.js` 頂部修改：
-   - `SUPABASE_URL = "https://你的專案代碼.supabase.co"`
-   - `SUPABASE_ANON_KEY = "你的 publishable/anon key"`
-2. 這裡只能放 publishable/anon key。**不可放 service_role key、Resend API key 或任何服務端密鑰。**
-3. 本地測試可用 VS Code Live Server；也可直接部署到 GitHub Pages。
+## 部署
 
-## C. GitHub Pages 部署
-1. 建立 GitHub repository，例如 `maintenance-system`。
-2. 上傳 `index.html`、`styles.css`、`app.js`，以及 `supabase` 資料夾（資料夾用於後端部署，不會被前端直接執行）。
-3. Repository → Settings → Pages。
-4. Build and deployment 選 `Deploy from a branch`；Branch 選 `main`、資料夾選 `/ (root)`，按 Save。
-5. 等待 GitHub 顯示網址，測試免登入新增作業；再用管理者帳號登入，測試樣板管理與歷史紀錄。
-6. 修改程式後 commit/push，GitHub Pages 會重新部署。
+1. 在 Supabase Dashboard 建立專案（或沿用既有專案），到 **SQL Editor** 執行 `supabase/setup.sql` 全文。此 SQL 只建立 `em_` 前綴物件，不會刪除原本飲料系統資料。
+2. 在 **Authentication → Users** 建立管理者 Email／密碼，並確認該使用者已建立。
+3. 在 SQL Editor **單獨執行**下列 SQL（替換管理者信箱）：
 
-## D. 設定 Email 自動通知
-這個版本使用 Supabase Edge Function + Resend，寄信密鑰只存在伺服器端，不會暴露在 GitHub Pages。
+   ```sql
+   insert into public.em_admins(user_id)
+   select id from auth.users where email='你的管理者信箱@example.com'
+   on conflict (user_id) do nothing;
+   ```
 
-### 先準備
-- 安裝 Node.js 與 Supabase CLI（依官方文件安裝）。
-- 在 Resend 建立帳號、驗證寄件網域，取得 API Key。
-- 將 `supabase/config.toml` 的 `project_id` 改成 Supabase 專案 ref。
+   **注意：** 只有建立 Auth 使用者還不夠，必須將其加入 `em_admins` 才有管理者權限。
+4. 修改 `js/config.js`：填入 **Project URL** 與 **Publishable／anon key**。兩者可以出現在前端；**絕對不要放 `service_role` 或 secret key**。
+5. 將 `index.html`、`css/`、`js/` 上傳到 GitHub Repository 根目錄，GitHub → Settings → Pages → Deploy from branch → main / root。
+6. 開啟 Pages 網址。先按「管理者登入」，建立樣板並新增欄位、儲存；登出後一般人員即可使用。
 
-### 部署指令（在專案根目錄終端機執行）
-```bash
-supabase login
-supabase link --project-ref 你的_PROJECT_REF
-supabase secrets set RESEND_API_KEY=re_xxxxxxxxx
-supabase secrets set MAINTENANCE_NOTIFY_TO=主管信箱@example.com,保養窗口@example.com
-supabase secrets set MAINTENANCE_FROM_EMAIL="設備保養系統 <maintenance@你的已驗證網域>"
-supabase functions deploy notify-completion
-```
-寄件地址必須符合 Resend 的網域驗證規則。收件人可以用逗號分隔多個 Email。
+## 驗收順序
 
-### 測試
-1. 管理者登入網站。
-2. 建立表單樣板。
-3. 作業人員可不登入，建立作業、填寫欄位並儲存。
-4. 免登入作業完成時會匯出 Excel；自動 Email 通知目前只會由已登入的管理者完成作業時呼叫。
-5. 只有資料庫成功寫入完成狀態後才會匯出 Excel 與呼叫寄信函式。
-6. 若郵件服務失敗，畫面會顯示「作業已完成並存檔，但 Email 通知失敗」；不會把已存檔的作業誤報成儲存失敗。
+1. 管理者登入 → 新增空白樣板 → 填名稱 → 新增數字欄位／勾選欄位 → **儲存樣板** → 重新整理確認仍存在。
+2. 管理者登出 → 選樣板 → 輸入姓名／設備 → 填寫 → **儲存作業**，畫面顯示作業編號。
+3. 同頁繼續填寫 → **結束作業**，畫面顯示「已完成」，且不會下載檔案。
+4. 管理者登入 → **歷史紀錄** → 重新整理 → 開啟作業 → 修改並儲存。
+5. 未登入時不應看見樣板管理與歷史紀錄；直接呼叫管理者 RPC 也應被拒絕。
 
-## E. 權限與安全注意事項
-- 表單樣板：所有人可以讀取樣板內容，讓免登入作業人員可以選擇並填寫；新增／修改／刪除僅限 authenticated 管理者。
-- 歷史作業紀錄：僅 authenticated 管理者可以查詢、查看及管理。anon 作業人員不會載入歷史清單。
-- 免登入作業需要 anon 可新增／更新作業資料。由於未登入人員沒有可靠的身份驗證，資料庫無法確認誰建立了某筆作業；因此 anon 更新權限是公開寫入風險。不要存放機密、敏感個資或高風險營運資料。
-- GitHub Pages 上的網址與前端程式是公開的；anon/publishable key 本身不是服務端密鑰，安全性仰賴 RLS。
-- 不要把 `service_role` key、Resend API key 寫入 `app.js` 或提交到 GitHub。
-- 管理者帳號請在 Supabase Authentication → Users 建立，不要開放網站訪客自行註冊。
-- 免登入作業資料儲存後不會顯示歷史紀錄；若要再次開啟或管理既有紀錄，請由管理者登入後操作。
-- 初版採用 JSONB 保存表單欄位與結果，適合快速上線；後續若需要稽核、細緻的資料權限或防止公開更新，應改用受保護的 Edge Function/RPC 來寫入作業。
+## 安全與限制
 
-### 免登入版本的 Email 通知注意事項
-免登入作業人員沒有登入 JWT，無法安全呼叫預設受 JWT 保護的寄信函式。為避免公開寄信端點被濫用，目前只有管理者登入後結束作業才會呼叫通知函式；免登入作業完成會儲存並匯出 Excel，但不自動寄信。若要讓匿名作業也能自動寄信，建議另加伺服器端驗證／限流流程。
-
-
-## V3 修正與部署
-1. **務必先在 Supabase SQL Editor 執行新版 `supabase/schema.sql` 全文**。只覆蓋 GitHub 前端檔案無法修復匿名儲存。
-2. 覆蓋 GitHub Pages 的 `index.html`、`app.js`、`styles.css`，保留你自己填好的 Supabase URL / publishable key。
-3. 管理者登入後新增樣板，填寫名稱與至少一個檢查欄位，按「儲存樣板」。新版使用明確 click 事件並顯示錯誤。
-4. 未登入人員選擇樣板、輸入姓名、套用表單、儲存或結束。結束不會自動匯出 Excel。
-5. 匿名作業的編輯憑證只保存在**當前頁面記憶體**，重新整理或關閉後無法自行重開，需管理者從歷史紀錄編輯。
-6. 只有登入管理者可查看歷史紀錄及管理樣板。免登入模式並非真正的身分驗證，請勿存放機密資料。
-7. 若樣板儲存仍失敗，請記下畫面 `儲存樣板失敗：...` 的完整訊息；也請檢查 Supabase Authentication 的登入帳號是否成功登入。
-
-安全提醒：目前所有已登入 Supabase 使用者都視為管理者；請關閉公開註冊，僅由管理者建立帳號。公開 RPC 仍可能遭濫用大量建立作業，正式上線應增加限流、驗證或部署於受控網路。
+- RLS 開啟，`em_jobs` 與 `em_admins` 不允許瀏覽器直接讀寫；寫入使用受控的 `SECURITY DEFINER` RPC。
+- 樣板內容可公開讀取，否則匿名人員無法填寫；樣板的寫入只給已列入 `em_admins` 的管理者。
+- 匿名建立作業仍可能遭到垃圾資料濫用。正式公開使用前建議增加 CAPTCHA、速率限制或公司網路存取限制。
+- 匿名編輯權杖不持久化；重新整理後不能取回未完成作業。可在下一階段增加具期限的作業恢復連結。
+- 此版本不含 Email 完成通知、照片、PDF 或真正 `.xlsx`；手動匯出使用 Excel 可開啟的 UTF-8 CSV。
+- 尚未連接你的實際 Supabase 專案做端對端測試；若發生錯誤，畫面右下角會顯示訊息，瀏覽器 F12 → Console 也會記錄。
