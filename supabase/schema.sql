@@ -58,10 +58,6 @@ create policy "Templates visible to public" on public.form_templates
 create policy "Authenticated manage templates" on public.form_templates
   for all to authenticated using (auth.uid() is not null) with check (auth.uid() is not null);
 
-create policy "Public can create jobs" on public.maintenance_jobs
-  for insert to anon, authenticated with check (true);
-create policy "Public can update jobs without history access" on public.maintenance_jobs
-  for update to anon using (true) with check (true);
 create policy "Authenticated can read jobs" on public.maintenance_jobs
   for select to authenticated using (auth.uid() is not null);
 create policy "Authenticated can manage jobs" on public.maintenance_jobs
@@ -71,7 +67,7 @@ revoke all on public.form_templates from anon, authenticated;
 revoke all on public.maintenance_jobs from anon, authenticated;
 grant usage on schema public to anon, authenticated;
 grant select on public.form_templates to anon, authenticated;
-grant insert, update on public.maintenance_jobs to anon;
+-- anon 不直接取得資料表寫入權限；改走有憑證驗證的 RPC。
 grant select, insert, update, delete on public.form_templates to authenticated;
 grant select, insert, update, delete on public.maintenance_jobs to authenticated;
 
@@ -89,3 +85,61 @@ select '設備例行保養單', '通用設備',
 where not exists (select 1 from public.form_templates);
 
 -- 管理者須在 Supabase Authentication → Users 建立帳號；前端不提供公開註冊。
+
+-- V3: 保養作業專用 RPC，匿名建立作業及使用隨機憑證繼續編輯。
+-- 憑證以 SHA-256 雜湊存入資料庫，不公開給歷史查詢使用者。
+alter table public.maintenance_jobs add column if not exists edit_token_hash text;
+
+create or replace function public.save_maintenance_job(p_job jsonb, p_edit_token text)
+returns uuid
+language plpgsql security definer set search_path = public, pg_temp
+as $$
+declare
+  v_id uuid;
+  v_existing public.maintenance_jobs%rowtype;
+  v_authenticated boolean := auth.uid() is not null;
+  v_hash text;
+begin
+  if p_edit_token is null or length(p_edit_token) < 20 then
+    raise exception '編輯憑證格式錯誤';
+  end if;
+  v_hash := encode(digest(p_edit_token,'sha256'),'hex');
+  v_id := (p_job->>'id')::uuid;
+  if v_id is null then raise exception '缺少作業編號'; end if;
+  if length(trim(coalesce(p_job->>'title',''))) = 0 or
+     length(trim(coalesce(p_job->>'inspector',''))) = 0 then
+    raise exception '請填寫作業名稱及保養人員姓名';
+  end if;
+  if not exists(select 1 from public.form_templates where id=(p_job->>'template_id')::uuid) then
+    raise exception '所選樣板不存在';
+  end if;
+  select * into v_existing from public.maintenance_jobs where id=v_id for update;
+  if found and not v_authenticated and (v_existing.edit_token_hash is null or v_existing.edit_token_hash <> v_hash) then
+    raise exception '無權編輯這筆作業，請建立新作業或由管理者登入修改';
+  end if;
+  if found then
+    update public.maintenance_jobs set
+      title=p_job->>'title', equipment=coalesce(p_job->>'equipment',''),
+      inspector=p_job->>'inspector',template_id=(p_job->>'template_id')::uuid,
+      template_title=coalesce(p_job->>'template_title',''),
+      scheduled_at=nullif(p_job->>'scheduled_at','')::date,
+      status=p_job->>'status',remarks=coalesce(p_job->>'remarks',''),
+      results=coalesce(p_job->'results','[]'::jsonb),
+      completed_at=nullif(p_job->>'completed_at','')::timestamptz,
+      updated_at=now()
+    where id=v_id;
+  else
+    insert into public.maintenance_jobs
+      (id,title,equipment,inspector,template_id,template_title,scheduled_at,status,remarks,results,completed_at,edit_token_hash)
+    values
+      (v_id,p_job->>'title',coalesce(p_job->>'equipment',''),p_job->>'inspector',
+      (p_job->>'template_id')::uuid,coalesce(p_job->>'template_title',''),
+      nullif(p_job->>'scheduled_at','')::date,p_job->>'status',
+      coalesce(p_job->>'remarks',''),coalesce(p_job->'results','[]'::jsonb),
+      nullif(p_job->>'completed_at','')::timestamptz,v_hash);
+  end if;
+  return v_id;
+end;
+$$;
+revoke all on function public.save_maintenance_job(jsonb,text) from public;
+grant execute on function public.save_maintenance_job(jsonb,text) to anon, authenticated;

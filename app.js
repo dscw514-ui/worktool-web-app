@@ -22,6 +22,7 @@ let editingTemplateFields = [];
 let activeJobTemplateId = null;
 let currentUser = null;
 let isAuthenticated = false;
+let currentJobEditToken = null;
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -104,6 +105,7 @@ function renderTemplateSelect(selected="") {
 }
 
 function resetJob() {
+  currentJobEditToken = null;
   $("jobForm").reset(); $("jobId").value=""; $("jobStatus").value="進行中";
   $("dynamicFields").innerHTML='<div class="empty">請先選擇表單樣板，再按「套用／重新載入表單」。</div>';
   activeFields=[]; currentResults={}; activeJobTemplateId=null; message("jobMessage","");
@@ -193,22 +195,23 @@ async function saveJob(status) {
     const now=localDateTime();
     const row={...data,updated_at:now};
     if(status!=="已完成") row.completed_at=null;
-    // 公開作業端沒有 SELECT 權限，因此不使用 .select()；成功與否以資料庫回傳的 error 判定。
-    const result=await db.from("maintenance_jobs").upsert(row,{onConflict:"id"});
+    // 透過資料庫函式驗證匿名編輯憑證，無須開放歷史 SELECT 權限。
+    const token=currentJobEditToken || crypto.randomUUID();
+    const result=await db.rpc("save_maintenance_job", {p_job:row,p_edit_token:token});
     if(result.error) throw result.error;
+    currentJobEditToken=token;
     $("jobId").value=data.id;
     $("jobStatus").value=data.status;
     await loadAll();
     if(status==="已完成") {
-      exportJob({...row,updated_at:now});
       if(isAuthenticated) {
         message("jobMessage","作業已成功儲存並結束。正在寄送通知…");
         const mail=await db.functions.invoke("notify-completion",{body:{job_id:data.id}});
-        if(mail.error) message("jobMessage","作業已完成並存檔，Excel 已下載，但 Email 通知失敗："+mail.error.message,true);
-        else if(mail.data?.ok) message("jobMessage","作業已完成並存檔，Excel 已下載，Email 通知已送出。");
-        else message("jobMessage","作業已完成並存檔，Excel 已下載；通知服務回覆："+(mail.data?.error||"未確認寄送結果"),true);
+        if(mail.error) message("jobMessage","作業已完成並存檔，但 Email 通知失敗："+mail.error.message,true);
+        else if(mail.data?.ok) message("jobMessage","作業已完成並存檔，Email 通知已送出。");
+        else message("jobMessage","作業已完成並存檔；通知服務回覆："+(mail.data?.error||"未確認寄送結果"),true);
       } else {
-        message("jobMessage","作業已成功儲存並結束，Excel 已下載。若需自動 Email 通知，請由管理者登入後完成作業。",false);
+        message("jobMessage","作業已成功儲存並結束（未自動匯出 Excel）。",false);
       }
     } else message("jobMessage","作業已成功儲存。此頁面可繼續修改並再次儲存；若關閉頁面，請管理者登入歷史紀錄管理。",false);
   } catch(e) {
@@ -218,7 +221,7 @@ async function saveJob(status) {
 
 $("saveDraftBtn").addEventListener("click",()=>saveJob("進行中"));
 $("finishBtn").addEventListener("click",()=>{
-  if(confirm("確定結束此保養作業？系統會先存檔，再匯出 Excel 並寄送通知。")) saveJob("已完成");
+  if(confirm("確定結束此保養作業？系統會先儲存，成功後標示已完成，不會自動匯出 Excel。")) saveJob("已完成");
 });
 $("exportCurrentBtn").addEventListener("click",()=>{
   try {const data=collectJob($("jobStatus").value||"進行中");exportJob(data);}
@@ -257,7 +260,7 @@ function renderBuilder() {
   root.querySelectorAll("[data-prop='type']").forEach(el=>el.addEventListener("change",()=>{const i=Number(el.closest("[data-row]").dataset.row);if(el.value==="choice"&&!editingTemplateFields[i].options)editingTemplateFields[i].options="合格,異常,不適用";}));
   root.querySelectorAll("[data-remove]").forEach(el=>el.addEventListener("click",()=>{editingTemplateFields.splice(Number(el.dataset.remove),1);renderBuilder();}));
 }
-$("templateForm").addEventListener("submit",async e=>{
+async function submitTemplate(e){
   e.preventDefault(); const btn=$('#templateForm button[type="submit"]');btn.disabled=true;
   try{
     if(!isAuthenticated) throw new Error("請先登入管理者帳號才能儲存樣板。");
@@ -270,10 +273,12 @@ $("templateForm").addEventListener("submit",async e=>{
     const row={title,category:$("templateCategory").value.trim(),fields,updated_at:localDateTime()};
     if($("templateId").value)row.id=$("templateId").value;
     const res=await db.from("form_templates").upsert(row).select().single();if(res.error)throw res.error;
-    message("templateMessage","樣板已儲存。");resetTemplate();await loadAll();
+    resetTemplate();await loadAll();message("templateMessage","樣板已儲存，已更新樣板清單。");
   }catch(err){message("templateMessage","儲存樣板失敗："+err.message,true);}
   finally{btn.disabled=false;}
-});
+}
+$("templateForm").addEventListener("submit",submitTemplate);
+$("saveTemplateBtn").addEventListener("click",submitTemplate);
 function editTemplate(t){
   $("templateId").value=t.id;$("templateTitle").value=t.title;$("templateCategory").value=t.category||"";
   editingTemplateFields=(t.fields||[]).map(f=>({...f}));renderBuilder();showTab("templates");window.scrollTo({top:0,behavior:"smooth"});
@@ -317,6 +322,7 @@ async function openJob(id){
   const t=templates.find(x=>x.id===j.template_id);
   if(!t){return alert("原表單樣板目前不存在；此筆紀錄仍可從歷史紀錄匯出。");}
   resetJob();showTab("jobs");
+  currentJobEditToken=null;
   $("jobId").value=j.id;$("jobTitle").value=j.title||"";$("equipment").value=j.equipment||"";$("inspector").value=j.inspector||"";
   $("jobTemplate").value=j.template_id;$("scheduledAt").value=j.scheduled_at||"";$("jobStatus").value=j.status||"進行中";$("remarks").value=j.remarks||"";
   activeFields=Array.isArray(t.fields)?t.fields:[];activeJobTemplateId=t.id;

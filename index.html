@@ -73,7 +73,7 @@
       <section id="tab-templates" class="tab-content hidden">
         <div class="section-title"><div><p class="eyebrow">FORM BUILDER</p><h2>保養表單樣板管理</h2></div><button id="newTemplateBtn" class="btn btn-outline">＋ 新增樣板</button></div>
         <div class="panel">
-          <form id="templateForm">
+          <form id="templateForm" novalidate>
             <input id="templateId" type="hidden">
             <div class="form-grid two">
               <label>樣板名稱<input id="templateTitle" required maxlength="120" placeholder="例如：冷卻水泵保養單"></label>
@@ -81,7 +81,7 @@
             </div>
             <div class="builder-heading"><div><h3>檢查欄位</h3><p class="muted small">每個欄位可設定類型、單位、選項與必填。</p></div><button id="addFieldBtn" class="btn btn-outline" type="button">＋ 新增欄位</button></div>
             <div id="builderFields" class="builder-fields"></div>
-            <div class="form-actions"><button class="btn btn-primary" type="submit">儲存樣板</button><button id="resetTemplateBtn" class="btn btn-outline" type="button">清除／取消</button></div>
+            <div class="form-actions"><button id="saveTemplateBtn" class="btn btn-primary" type="button">儲存樣板</button><button id="resetTemplateBtn" class="btn btn-outline" type="button">清除／取消</button></div>
             <p id="templateMessage" class="message" role="status"></p>
           </form>
         </div>
