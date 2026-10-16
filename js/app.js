@@ -47,9 +47,67 @@ function jobRows(job,t){if(!job)return;const rows=[['項目','內容'],['作業�
 function exportJob(job,t){if(job)csvDownload(jobRows(job,t),`設備保養_${job.equipment||'作業'}.csv`);}
 
 function downloadTemplates(templates){
- const payload={format:'em-templates-v1',exported_at:new Date().toISOString(),templates:templates.map(t=>({name:t.name,description:t.description||'',fields:t.fields}))};
- const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`保養樣板_${templates.length===1?templates[0].name:'全部'}_${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);
+ if(!templates.length){toast('目前沒有可匯出的樣板',true);return;}
+ // 一列代表一個樣板欄位；同一樣板的名稱和說明會重複，方便 Excel 篩選整理。
+ const rows=[['樣板名稱','樣板說明','欄位順序','欄位ID','欄位名稱','欄位類型','單位','必填','單選選項']];
+ for(const t of templates)for(const [i,f] of (t.fields||[]).entries())rows.push([
+  t.name,t.description||'',i+1,f.id||'',f.label||'',f.type||'',f.unit||'',f.required?'是':'否',(f.options||[]).join(' | ')
+ ]);
+ csvDownload(rows,`保養樣板_${templates.length===1?templates[0].name:'全部'}_${new Date().toISOString().slice(0,10)}.csv`);
 }
+
+// RFC 4180 CSV reader: quoted commas, quotes, CRLF and multiline cells.
+function parseTemplateCsv(text){
+ const input=String(text).replace(/^\uFEFF/,'');const rows=[];let row=[],cell='',quoted=false;
+ for(let i=0;i<input.length;i++){
+  const c=input[i];
+  if(quoted){if(c==='"'&&input[i+1]==='"'){cell+='"';i++;}else if(c==='"')quoted=false;else cell+=c;}
+  else if(c==='"'){if(cell!=='')throw new Error(`CSV 第 ${rows.length+1} 列引號格式錯誤`);quoted=true;}
+  else if(c===','){row.push(cell);cell='';}
+  else if(c==='\r'||c==='\n'){if(c==='\r'&&input[i+1]==='\n')i++;row.push(cell);if(row.some(x=>x.trim()!==''))rows.push(row);row=[];cell='';}
+  else cell+=c;
+ }
+ if(quoted)throw new Error('CSV 引號未正確結束');row.push(cell);if(row.some(x=>x.trim()!==''))rows.push(row);
+ if(rows.length<2)throw new Error('CSV 沒有樣板欄位資料');
+ const columns=['樣板名稱','樣板說明','欄位順序','欄位ID','欄位名稱','欄位類型','單位','必填','單選選項'];
+ const header=rows.shift().map(x=>x.trim());
+ if(header.length!==columns.length||columns.some((x,i)=>header[i]!==x))throw new Error('CSV 欄位標題不符，請先匯出系統樣板 CSV，再使用 Excel 編輯後匯入');
+ if(rows.length>1000)throw new Error('一次最多匯入 1000 個欄位');
+ const grouped=new Map();
+ rows.forEach((cells,index)=>{
+  const line=index+2;
+  if(cells.length!==columns.length)throw new Error(`CSV 第 ${line} 列應有 ${columns.length} 欄，實際 ${cells.length} 欄`);
+  const [nameRaw,descriptionRaw,orderRaw,idRaw,labelRaw,typeRaw,unitRaw,requiredRaw,optionsRaw]=cells;
+  const name=nameRaw.trim(),description=descriptionRaw.trim(),label=labelRaw.trim(),type=typeRaw.trim(),requiredText=requiredRaw.trim();
+  if(!name||!label)throw new Error(`CSV 第 ${line} 列樣板名稱與欄位名稱不可空白`);
+  if(!fieldTypes[type])throw new Error(`CSV 第 ${line} 列欄位類型「${type}」無效`);
+  if(!/^[1-9]\d*$/.test(orderRaw.trim()))throw new Error(`CSV 第 ${line} 列欄位順序必須是正整數`);
+  if(!['是','否','true','false','1','0'].includes(requiredText.toLowerCase()))throw new Error(`CSV 第 ${line} 列必填欄位只能填「是」或「否」`);
+  const required=['是','true','1'].includes(requiredText.toLowerCase());
+  const options=type==='radio'?optionsRaw.split('|').map(x=>x.trim()).filter(Boolean):[];
+  // Generate fresh field IDs so imported templates cannot accidentally share identifiers.
+  const field={id:uid(),label,type,unit:unitRaw.trim(),required,options};
+  if(!grouped.has(name))grouped.set(name,{id:null,name,description,ordered:[],seen:new Set()});
+  const template=grouped.get(name),order=Number(orderRaw.trim());
+  if(template.description!==description)throw new Error(`CSV 第 ${line} 列「${name}」的樣板說明不一致`);
+  if(template.seen.has(order))throw new Error(`CSV 第 ${line} 列「${name}」的欄位順序重複`);
+  template.seen.add(order);template.ordered.push({order,field});
+ });
+ if(grouped.size>50)throw new Error('一次最多匯入 50 個樣板');
+ return [...grouped.values()].map(t=>{const result={id:null,name:t.name,description:t.description,fields:t.ordered.sort((a,b)=>a.order-b.order).map(x=>x.field)};validateTemplate(result);return result;});
+}
+async function importTemplatesCsv(file){
+ if(!file)return;
+ if(!/\.csv$/i.test(file.name))throw new Error('請選擇 .csv 檔案');
+ if(file.size>1024*1024)throw new Error('CSV 檔案不得超過 1MB');
+ const items=parseTemplateCsv(await file.text());
+ if(!confirm(`將匯入 ${items.length} 個樣板、共 ${items.reduce((n,t)=>n+t.fields.length,0)} 個欄位。\n匯入會建立新樣板，不覆蓋現有樣板。是否繼續？`))return;
+ let count=0;
+ try{for(const t of items){await state.api.saveTemplate(t);count++;}}
+ catch(error){await reloadTemplates();templateView();throw new Error(`已匯入 ${count} 個樣板，其後失敗：${error.message}`);}
+ await reloadTemplates();templateView();toast(`已成功匯入 ${count} 個 CSV 樣板`);
+}
+
 async function emailJob(job,t){
  if(!job?.id)throw new Error('請先儲存作業');
  const recipient=prompt('請輸入收件者 Email（管理者登入後由伺服器寄送；一般人員會開啟郵件程式）');
@@ -69,8 +127,8 @@ async function emailJob(job,t){
 
 function templateView(){if(!state.admin){state.tab='work';view();return;}
  const t=state.editingTemplate||{id:null,name:'',description:'',fields:[]};
- $('main').innerHTML=`<section class="card"><h2>表單樣板管理</h2><p class="muted">按「新增空白樣板」後，先填樣板名稱，再新增欄位，最後按「儲存樣板」。</p><div class="actions"><button id="newTemplate" class="primary">新增空白樣板</button><button id="exportAllTemplates">匯出全部樣板</button><button id="importTemplate">匯入樣板 JSON</button><input id="templateFile" type="file" accept=".json,application/json" hidden></div><div class="grid">${state.templates.map(x=>`<div class="item"><b>${esc(x.name)}</b><p class="muted small">${x.fields?.length||0} 個欄位</p><button data-edit="${esc(x.id)}">編輯</button> <button data-export="${esc(x.id)}">匯出 JSON</button> <button class="danger" data-delete="${esc(x.id)}">刪除</button></div>`).join('')}</div></section><section class="card"><h2>${t.id?'編輯樣板':'建立新樣板'}</h2><label>樣板名稱<input id="tplName" value="${esc(t.name)}" placeholder="例如：SVC 冷卻泵定期保養"></label><label>說明<textarea id="tplDesc" rows="2">${esc(t.description)}</textarea></label><h3>保養欄位</h3><div id="fieldEditor">${t.fields.map((f,i)=>editorField(f,i)).join('')}</div><div class="actions"><button id="addField">＋ 新增欄位</button><button id="saveTemplate" class="primary" type="button">儲存樣板</button></div><div id="templateStatus" class="notice">等待編輯</div></section>`;
- $('exportAllTemplates').onclick=()=>downloadTemplates(state.templates);document.querySelectorAll('[data-export]').forEach(b=>b.onclick=()=>downloadTemplates([state.templates.find(t=>t.id===b.dataset.export)]));$('importTemplate').onclick=()=>$('templateFile').click();$('templateFile').onchange=e=>run($('importTemplate'),async()=>{const file=e.target.files?.[0];if(!file)return;if(file.size>1024*1024)throw new Error('檔案不得超過 1MB');let obj;try{obj=JSON.parse(await file.text());}catch{throw new Error('不是有效的 JSON 檔案');}if(obj.format!=='em-templates-v1'||!Array.isArray(obj.templates)||!obj.templates.length||obj.templates.length>50)throw new Error('匯入格式不正確，請使用本系統匯出的 JSON（1～50 個樣板）');const items=obj.templates.map(t=>({id:null,name:t.name,description:t.description||'',fields:t.fields}));items.forEach(validateTemplate);if(!confirm(`確定匯入 ${items.length} 個樣板？會建立新樣板，不覆蓋既有樣板。`))return;let count=0;try{for(const t of items){await state.api.saveTemplate(t);count++;}}catch(error){await reloadTemplates();templateView();throw new Error(`已成功匯入 ${count} 個，下一個失敗：${error.message}`);}await reloadTemplates();templateView();toast(`已成功匯入 ${count} 個樣板`);});$('newTemplate').onclick=()=>{state.editingTemplate={id:null,name:'',description:'',fields:[]};templateView();};
+ $('main').innerHTML=`<section class="card"><h2>表單樣板管理</h2><p class="muted">按「新增空白樣板」後，先填樣板名稱，再新增欄位，最後按「儲存樣板」。</p><div class="actions"><button id="newTemplate" class="primary">新增空白樣板</button><button id="exportAllTemplates">匯出全部樣板 CSV</button><button id="importTemplate">匯入樣板 CSV</button><input id="templateFile" type="file" accept=".csv,text/csv" hidden></div><div class="grid">${state.templates.map(x=>`<div class="item"><b>${esc(x.name)}</b><p class="muted small">${x.fields?.length||0} 個欄位</p><button data-edit="${esc(x.id)}">編輯</button> <button data-export="${esc(x.id)}">匯出 CSV</button> <button class="danger" data-delete="${esc(x.id)}">刪除</button></div>`).join('')}</div></section><section class="card"><h2>${t.id?'編輯樣板':'建立新樣板'}</h2><label>樣板名稱<input id="tplName" value="${esc(t.name)}" placeholder="例如：SVC 冷卻泵定期保養"></label><label>說明<textarea id="tplDesc" rows="2">${esc(t.description)}</textarea></label><h3>保養欄位</h3><div id="fieldEditor">${t.fields.map((f,i)=>editorField(f,i)).join('')}</div><div class="actions"><button id="addField">＋ 新增欄位</button><button id="saveTemplate" class="primary" type="button">儲存樣板</button></div><div id="templateStatus" class="notice">等待編輯</div></section>`;
+ $('exportAllTemplates').onclick=()=>downloadTemplates(state.templates);document.querySelectorAll('[data-export]').forEach(b=>b.onclick=()=>downloadTemplates([state.templates.find(t=>t.id===b.dataset.export)]));$('importTemplate').onclick=()=>$('templateFile').click();$('templateFile').onchange=e=>{const file=e.target.files?.[0];e.target.value='';if(file)run($('importTemplate'),()=>importTemplatesCsv(file));};$('newTemplate').onclick=()=>{state.editingTemplate={id:null,name:'',description:'',fields:[]};templateView();};
  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{state.editingTemplate=structuredClone(state.templates.find(t=>t.id===b.dataset.edit));templateView();});
  document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=e=>run(e.currentTarget,async()=>{if(!confirm('確定刪除樣板？已有作業使用的樣板不可刪除。'))return;await state.api.deleteTemplate(b.dataset.delete);await reloadTemplates();toast('樣板已刪除');templateView();}));
  $('addField').onclick=()=>{const draft=collectTemplate();draft.fields.push({id:uid(),label:'',type:'text',required:false,options:[],unit:''});state.editingTemplate=draft;templateView();};
