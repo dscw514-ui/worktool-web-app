@@ -1,7 +1,7 @@
 import {backend} from './backend.js';
 import {esc,uid,nowLocal,fieldTypes,validateTemplate,validateJob,csvDownload} from './logic.js';
 const $=id=>document.getElementById(id);
-const state={api:null,user:null,admin:false,tab:'work',templates:[],template:null,job:null,editingTemplate:null,history:[],historyJob:null,busy:false};
+const state={api:null,user:null,admin:false,tab:'work',templates:[],template:null,job:null,editingTemplate:null,history:[],historyJob:null,busy:false,workList:[],jobReadOnly:false};
 const toast=(msg,bad=false)=>{const e=document.createElement('div');e.className='toast'+(bad?' bad':'');e.textContent=msg;$('toasts').append(e);setTimeout(()=>e.remove(),5500);};
 const err=e=>{console.error(e);toast(e.message||String(e),true);};
 async function run(btn,fn){if(state.busy)return;state.busy=true;if(btn)btn.disabled=true;try{await fn();}catch(e){err(e);}finally{state.busy=false;if(btn&&btn.isConnected)btn.disabled=false;}}
@@ -20,14 +20,18 @@ function loginForm(){
 async function logout(){await run($('authBtn'),async()=>{await state.api.logout();state.admin=false;state.user=null;state.tab='work';state.historyJob=null;toast('已登出');view();});}
 function workView(){
  const job=state.job;
- $('main').innerHTML=`<section class="card"><h2>新增保養作業</h2><div class="grid"><div><label>選擇保養樣板</label><select id="templatePick"><option value="">請選擇</option>${state.templates.map(t=>`<option value="${esc(t.id)}" ${(job?.template_id||state.template?.id)===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><div><label>保養人員姓名</label><input id="inspector" maxlength="80" placeholder="請輸入姓名" value="${esc(job?.inspector||'')}"></div><div><label>設備名稱／編號</label><input id="equipment" maxlength="160" placeholder="例如：冷卻水泵 P-101" value="${esc(job?.equipment||'')}"></div><div><label>保養日期時間</label><input type="datetime-local" id="workDate" value="${esc(job?.work_date||nowLocal())}"></div></div><div class="actions"><button id="newJob">新增作業／清空表單</button></div></section><section id="workFields"></section>`;
- $('templatePick').onchange=()=>{if(state.job?.id&&!confirm('切換樣板會清除目前作業，確定？')){$('templatePick').value=state.job.template_id;return;}state.job=null;const t=state.templates.find(t=>t.id===$('templatePick').value);state.template=t||null;workView();};
- $('newJob').onclick=()=>{if(state.job?.id&&!confirm('目前作業尚在畫面上，確定要新增？'))return;state.job=null;state.template=state.templates.find(t=>t.id===$('templatePick').value)||null;workView();};
+ const available=state.workList;
+ const options=available.map(j=>`<option value="${esc(j.id)}" ${job?.id===j.id?'selected':''}>${j.status==='completed'?'✅ 已完成':'🟡 進行中'}｜${esc(j.equipment)}｜${esc(j.inspector)}｜${esc((j.work_date||'').replace('T',' ').slice(0,16))}</option>`).join('');
+ $('main').innerHTML=`<section class="card"><h2>查詢／繼續保養作業</h2><div class="grid"><div><label>已建立作業（已完成／進行中）</label><select id="existingJob"><option value="">請選擇既有作業</option>${options}</select></div><div class="actions" style="align-items:end"><button id="refreshWork">重新整理作業清單</button><button id="openExisting" class="primary">開啟選取作業</button></div></div><p class="muted small">可查看及匯出既有作業。進行中作業僅建立時的同一瀏覽器工作階段可繼續修改；已完成作業僅能查看與匯出。此清單對開啟網站的人可見，請勿存放機密資料。</p></section><section class="card"><h2>新增／填寫保養作業</h2><div class="grid"><div><label>選擇保養樣板</label><select id="templatePick"><option value="">請選擇</option>${state.templates.map(t=>`<option value="${esc(t.id)}" ${(job?.template_id||state.template?.id)===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><div><label>保養人員姓名</label><input id="inspector" maxlength="80" placeholder="請輸入姓名" value="${esc(job?.inspector||'')}"></div><div><label>設備名稱／編號</label><input id="equipment" maxlength="160" placeholder="例如：冷卻水泵 P-101" value="${esc(job?.equipment||'')}"></div><div><label>保養日期時間</label><input type="datetime-local" id="workDate" value="${esc(job?.work_date||nowLocal())}"></div></div><div class="actions"><button id="newJob">新增作業／清空表單</button></div></section><section id="workFields"></section>`;
+ $('refreshWork').onclick=e=>run(e.currentTarget,async()=>{if(!confirm('重新整理清單不會儲存目前尚未儲存的輸入，確定？'))return;await refreshWorkList();workView();});
+ $('openExisting').onclick=e=>run(e.currentTarget,async()=>{const id=$('existingJob').value;if(!id)throw new Error('請先選擇一筆作業');await openWorkJob(id);});
+ $('templatePick').onchange=()=>{if(state.job?.id&&!confirm('切換樣板會清除目前作業，確定？')){$('templatePick').value=state.job.template_id;return;}state.job=null;state.jobReadOnly=false;const t=state.templates.find(t=>t.id===$('templatePick').value);state.template=t||null;workView();};
+ $('newJob').onclick=()=>{if(state.job?.id&&!confirm('目前作業尚在畫面上，確定要新增？'))return;state.job=null;state.jobReadOnly=false;state.template=state.templates.find(t=>t.id===$('templatePick').value)||null;workView();};
  if(!state.template&&job)state.template=state.templates.find(t=>t.id===job.template_id)||null;
  const t=state.template;if(!t){$('workFields').innerHTML='<div class="notice">請先選擇保養樣板。</div>';return;}
  const values=job?.values||{};
- $('workFields').innerHTML=`<section class="card"><h2>${esc(t.name)}</h2><p class="muted">${esc(t.description||'')}</p>${renderFields(t.fields,values)}<div class="actions"><button id="saveDraft" class="primary">儲存作業</button><button id="finishJob" class="primary">結束作業</button><button id="exportCurrent" ${!job?.id?'disabled':''}>手動匯出 CSV</button><button id="emailCurrent" ${!job?.id?'disabled':''}>發送 Mail</button></div><p class="muted small">結束作業不會自動匯出檔案。關閉頁面前請確認儲存成功。</p><div id="jobStatus" class="notice ${job?.status==='completed'?'success':''}">${job?.id?`作業編號：${esc(job.id)}　狀態：${job.status==='completed'?'已完成':'草稿'}`:'尚未儲存'}</div></section>`;
- $('saveDraft').onclick=e=>run(e.currentTarget,()=>saveWork(false));$('finishJob').onclick=e=>run(e.currentTarget,()=>saveWork(true));$('exportCurrent').onclick=()=>exportJob(state.job,t);$('emailCurrent').onclick=e=>run(e.currentTarget,()=>emailJob(state.job,t));
+ $('workFields').innerHTML=`<section class="card"><h2>${esc(t.name)}</h2><p class="muted">${esc(t.description||'')}</p>${renderFields(t.fields,values)}<div class="actions">${state.jobReadOnly?'':`<button id="saveDraft" class="primary">儲存作業</button><button id="finishJob" class="primary">結束作業</button>`}<button id="exportCurrent" ${!job?.id?'disabled':''}>手動匯出 CSV</button><button id="emailCurrent" ${!job?.id?'disabled':''}>發送 Mail</button></div><p class="muted small">結束作業不會自動匯出檔案。關閉頁面前請確認儲存成功。</p><div id="jobStatus" class="notice ${job?.status==='completed'?'success':''}">${job?.id?`作業編號：${esc(job.id)}　狀態：${job.status==='completed'?'已完成':'草稿'}`:'尚未儲存'}</div></section>`;
+ if(!state.jobReadOnly){$('saveDraft').onclick=e=>run(e.currentTarget,()=>saveWork(false));$('finishJob').onclick=e=>run(e.currentTarget,()=>saveWork(true));}else{$('workFields').querySelectorAll('input,textarea,select').forEach(el=>el.disabled=true);$('jobStatus').textContent+='｜唯讀：可匯出 CSV；進行中作業需原瀏覽器編輯權杖才能續填';}$('exportCurrent').onclick=()=>exportJob(state.job,t);$('emailCurrent').onclick=e=>run(e.currentTarget,()=>emailJob(state.job,t));
 }
 function renderFields(fields,values={}){
  let previous=null,html='<div class="template-grid">';
@@ -50,7 +54,16 @@ async function saveWork(finish){const t=state.template;if(!t)throw new Error('�
  const payload={template_id:t.id,inspector,equipment,work_date,values};
  let result;if(state.job?.id){result=await state.api.saveJob(state.job.id,state.job.token,payload,finish);}else{result=await state.api.createJob({...payload,finish});}
  state.job={...payload,id:result.id,token:result.token||state.job?.token,status:result.status};
+ if(state.job.token)sessionStorage.setItem('em_edit_'+state.job.id,state.job.token);state.jobReadOnly=finish;await refreshWorkList();
  toast(finish?'作業已成功結束並儲存（不自動匯出）':'作業已儲存');workView();}
+async function refreshWorkList(){const data=await state.api.workList();state.workList=data.jobs||[];}
+async function openWorkJob(id){
+ const data=await state.api.workJob(id),j=data.job;
+ const token=sessionStorage.getItem('em_edit_'+id)||null;
+ state.job={...j,token};state.jobReadOnly=j.status==='completed'||!token;
+ state.template={id:j.template_id,name:j.template_name,description:'',fields:j.fields||[]};
+ toast(state.jobReadOnly?'已開啟作業（唯讀，可匯出）':'已開啟進行中作業，可繼續填寫');workView();
+}
 function jobRows(job,t){if(!job)return;const rows=[['項目','內容'],['作業編號',job.id],['樣板',t?.name||job.template_name],['保養人員',job.inspector],['設備',job.equipment],['日期',job.work_date],['狀態',job.status],...((t?.fields||job.fields||[]).map(f=>[f.label,job.values?.[f.id]??'']))];return rows;}
 function exportJob(job,t){if(job)csvDownload(jobRows(job,t),`設備保養_${job.equipment||'作業'}.csv`);}
 
@@ -154,5 +167,5 @@ function historyDetail(){const j=state.historyJob;if(!j)return;const fields=j.fi
  $('saveHistory').onclick=e=>run(e.currentTarget,async()=>{const payload={inspector:$('hInspector').value.trim(),equipment:$('hEquipment').value.trim(),work_date:$('hDate').value,status:$('hStatus').value,values:getValues(fields)};if(!payload.inspector||!payload.equipment)throw new Error('人員與設備不得空白');if(payload.status==='completed')validateJob(fields,payload.values);await state.api.adminSaveJob(j.id,payload);toast('歷史紀錄已更新');state.historyJob=(await state.api.adminJob(j.id)).job;await loadHistory();historyView();});$('exportHistory').onclick=()=>exportJob(j,null);$('emailHistory').onclick=e=>run(e.currentTarget,()=>emailJob(j,null));
 }
 async function init(){try{state.api=await backend();state.user=await state.api.session();if(state.user){try{await state.api.adminCheck();state.admin=true;}catch{state.admin=false;}}
- await reloadTemplates();view();}catch(e){console.error(e);$('app').innerHTML=`<section class="card"><h1>無法啟動系統</h1><div class="notice error">${esc(e.message)}</div><p>請確認 js/config.js 設定、Supabase SQL 是否已執行，以及網路連線。</p></section>`;}}
+ await reloadTemplates();await refreshWorkList();view();}catch(e){console.error(e);$('app').innerHTML=`<section class="card"><h1>無法啟動系統</h1><div class="notice error">${esc(e.message)}</div><p>請確認 js/config.js 設定、Supabase SQL 是否已執行，以及網路連線。</p></section>`;}}
 init();

@@ -25,6 +25,8 @@ export async function backend() {
     createJob:(payload)=>call('em_job_create',{p_job:payload}),
     saveJob:(id,token,payload,finish)=>call('em_job_save',{p_id:id,p_token:token,p_job:payload,p_finish:finish}),
     history:()=>call('em_history'),
+    workList:()=>call('em_work_list'),
+    workJob:(id)=>call('em_work_get',{p_id:id}),
     adminJob:(id)=>call('em_admin_job',{p_id:id}),
     adminSaveJob:(id,payload)=>call('em_admin_job_save',{p_id:id,p_job:payload}),
     async emailJob(id,to){const {data,error}=await sb.functions.invoke('email-maintenance',{body:{job_id:id,to}});if(error)throw new Error(error.message);if(!data?.ok)throw new Error(data?.error||'寄信失敗');return data;},
